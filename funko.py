@@ -128,12 +128,97 @@ class DropppIO(PlaywrightUtils):
         if not await self.is_logged_in(timeout=20000):
             assert False, "Failed to login"
 
+class QueuePage(PlaywrightUtils):
+    def __init__(self, page):
+        super().__init__(page=page)
 
+    async def click_queue_btn(self):
+        queue_btn = await self.get_element("a.collection__header__button", timeout=0)
+        redirect_btn_link = await queue_btn.get_attribute("href")
+        await self.page.goto(redirect_btn_link)#, wait_until="load", timeout=40000)
+
+    async def bypass_captcha(self):
+        droppp_captcha = DropppCaptcha(self.page)
+        await droppp_captcha.handle_droppp_captcha()
+
+    async def handle_queue(self):
+        await self.page.goto("file:///C:/Users/Denys/Downloads/Queue-it.html", wait_until="domcontentloaded")
+        await self.wait_for_queue_page_load()
+        print("Queue page loaded")
+        left_wait_time = await self.get_left_wait_time()
+        print(f"Left wait time: {left_wait_time} seconds")
+        await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
+
+    async def wait_for_queue_page_load(self):
+        print("Waiting for queue page load")
+        await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
+
+    async def get_left_wait_time(self):
+        progress_info_el = await self.get_element("span#MainPart_lbWhichIsIn", timeout=5000)
+        print(f"1Progress info el: {progress_info_el}")
+        if not progress_info_el:
+            progress_info_el = await self.get_element("div#defaultCountdown", timeout=5000)
+
+        progress_info = await progress_info_el.text_content()
+        raw_left_wait_time = progress_info.strip()
+        print(f"Raw left wait time: {raw_left_wait_time}")
+        time_number, time_type = raw_left_wait_time.split(" ")[:2]
+
+        left_wait_time = QueuePage.convert_time(time_number.strip(), time_type.strip().lower())
+        print(f"Left wait time: {left_wait_time} seconds")
+        return left_wait_time
+
+    @staticmethod
+    def convert_time(time_number, time_type):
+        time_number = int(time_number)
+        if time_type.startswith("second"):
+            return time_number
+        elif time_type.startswith("minute"):
+            return time_number * 60
+        elif time_type.startswith("hour"):
+            return time_number * 60 * 60
+
+    async def close_long_wait_queue(self, left_wait_time: int, max_wait_time: int):
+        if left_wait_time > max_wait_time:
+            await self.page.close()
+
+class DropppCaptcha(PlaywrightUtils):
+    def __init__(self, page):
+        super().__init__(page=page)
+
+    async def handle_droppp_captcha(self):
+        if await self.is_droppp_captcha_on():
+            await self.bypass_droppp_captcha()
+
+    async def is_droppp_captcha_on(self):
+        return await self.get_element("div[class^=styles_formContainer]", timeout=30000)
+
+    async def bypass_droppp_captcha(self):
+        answer = 1  # await self.get_droppp_captcha_answer()
+        await self.page.locator("input[inputmode=numeric]").fill(str(answer))
+        await self.handle_element("button", "click")
+
+    async def get_droppp_captcha_answer(self):
+        captcha_question = await (await self.get_element("div[class^=styles_description]")).text_content()
+
+        first_number = captcha_question.split("What does ")[1].split(" ")[0]
+        second_number = captcha_question.split(" equal?", 1)[0].split(" ")[-1]
+        operation = captcha_question.split(" equal?", 1)[0].split(" ")[-2]
+
+        answer = 0
+        if operation == "plus":
+            answer = int(first_number) + int(second_number)
+        elif operation == "minus":
+            answer = int(first_number) - int(second_number)
+
+        # print(f"Answer: {answer}")
+
+        return answer
 
 class FunkoBot:
     TWOCAPTCHA_PATH = os.path.abspath("./2captcha-chrome")
-    BASE_PROFILE_DIR = "profiles"
-    TWOCAPTCHA_API_KEY = ""
+    BASE_PROFILE_DIR = os.path.abspath("./profiles")
+    TWOCAPTCHA_API_KEY = "23086f2c5302c5d3c0e6e950fa8d1227"
 
     sale_link = None
 
@@ -161,22 +246,23 @@ class FunkoBot:
 
     @staticmethod
     async def handle_account(account, playwright):
-        funko_profile = FunkoProfile(*account)
-        for _ in range(2):
-            try:
+                funko_profile = FunkoProfile(*account)
+        # for _ in range(2):
+        #     try:
                 await funko_profile.get_context(playwright)
                 await funko_profile.adjust_twocaptcha_extension()
-                return await funko_profile.visit_funko()
+                await funko_profile.visit_funko()
+                await funko_profile.join_queue()
             # except FailedToLogin as e:
             #     logger.error(f"{account[0]} - failed to login. Trying again...")
-            except Exception as e:
-                logger.error(f"{account[0]} - have unhandled error. Trying again...")
-                await funko_profile.close()
-                await asyncio.sleep(3)
+            # except Exception as e:
+            #     logger.error(f"{account[0]} - have unhandled error. Trying again...")
+            #     await funko_profile.close()
+            #     await asyncio.sleep(3)
 
     @staticmethod
     def ask_for_funko_sale_link():
-        return input("Enter a link to the Funko sale: ")
+        return 'https://digital.funko.com/drop/105/dc-teen-titans-go-series-1/'  # input("Enter a link to the Funko sale: ")
 
     @staticmethod
     def ask_to_exit():
@@ -246,6 +332,12 @@ class FunkoProfile:
             raise FailedToLogin(f"Failed to login {self.email}!")
         return True
 
+    async def join_queue(self):
+        queue = QueuePage(page=self.page)
+        await queue.click_queue_btn()
+        # await queue.bypass_captcha()
+        await queue.handle_queue()
+
     async def close(self):
         try:
             await self.context.close()
@@ -257,7 +349,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    print("All crypto software: @web3enjoyer_club")
+    print("All crypto moves: @web3enjoyer_club")
     logger.remove(0)
 
     logger.add("out.log")

@@ -1,0 +1,6 @@
+.idea
+venv
+old
+profiles
+out.log
+accounts.txt
