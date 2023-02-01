@@ -1,7 +1,9 @@
 import asyncio
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Playwright
 import os
 import sys
+import re
+
 
 from loguru import logger
 
@@ -71,11 +73,19 @@ class TwoCaptcha:
         self.page = None
 
     async def get_background(self):
-        await asyncio.sleep(1)
-        self.background = self.context.service_workers[0]
+        self.background = await self.get_captcha_popup()
         if not self.background:
             self.background = await self.context.wait_for_event("serviceworker")
         return self.background
+
+    async def get_captcha_popup(self):  # seems not working
+        while True:
+            # await asyncio.sleep(0.1)  #need to switch on############################################################
+            if len(self.context.service_workers) > 0:
+                print("Found captcha popup")
+                return self.context.service_workers[0]
+            print("Waiting for captcha popup")
+            await asyncio.sleep(0.1)
 
     async def get_page(self):
         self.page = await self.context.new_page()
@@ -142,12 +152,21 @@ class QueuePage(PlaywrightUtils):
         await droppp_captcha.handle_droppp_captcha()
 
     async def handle_queue(self):
-        await self.page.goto("file:///C:/Users/Denys/Downloads/Queue-it.html", wait_until="domcontentloaded")
+        await self.page.goto("file:///C:/Users/Denys/Downloads/Queue-it_.html", wait_until="domcontentloaded")
         await self.wait_for_queue_page_load()
         print("Queue page loaded")
-        left_wait_time = await self.get_left_wait_time()
-        print(f"Left wait time: {left_wait_time} seconds")
-        await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
+        await self.queue_page_status_checker()
+
+    async def queue_page_status_checker(self, timeout=720, delay=5): # 12 minutes wait
+        for _ in range(timeout // delay):
+            left_wait_time = await self.get_left_wait_time_regex()  # await self.get_left_wait_time()
+            if not left_wait_time:
+                print("Can't parse left wait time")
+                await asyncio.sleep(delay)
+                continue
+            print(f"Left wait time: {left_wait_time} seconds")
+            await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
+            break
 
     async def wait_for_queue_page_load(self):
         print("Waiting for queue page load")
@@ -164,12 +183,12 @@ class QueuePage(PlaywrightUtils):
         print(f"Raw left wait time: {raw_left_wait_time}")
         time_number, time_type = raw_left_wait_time.split(" ")[:2]
 
-        left_wait_time = QueuePage.convert_time(time_number.strip(), time_type.strip().lower())
+        left_wait_time = QueuePage.convert_time_seconds(time_number.strip(), time_type.strip().lower())
         print(f"Left wait time: {left_wait_time} seconds")
         return left_wait_time
 
     @staticmethod
-    def convert_time(time_number, time_type):
+    def convert_time_seconds(time_number, time_type):
         time_number = int(time_number)
         if time_type.startswith("second"):
             return time_number
@@ -177,6 +196,53 @@ class QueuePage(PlaywrightUtils):
             return time_number * 60
         elif time_type.startswith("hour"):
             return time_number * 60 * 60
+        return 0
+
+    async def get_left_wait_time_regex(self):  # test
+        progress_info_el = await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
+        print(f"2Progress info el: {progress_info_el}")
+        progress_info = await progress_info_el.inner_text()
+        print(f"Progress info: {progress_info}")
+
+        left_wait_time = QueuePage.extract_time(progress_info.lower())
+        print(f"Left wait time: {left_wait_time} seconds")
+
+        if not left_wait_time:  # if not found
+             return None
+
+        # convert to seconds
+        left_wait_time_seconds = QueuePage.convert_time(left_wait_time)
+        print(f"Left wait time: {left_wait_time_seconds} seconds")
+        return left_wait_time_seconds
+
+    @staticmethod
+    def is_time_extracted(left_wait_time):
+        return left_wait_time
+
+    @staticmethod
+    def extract_time(text):  # test
+        result = {}
+
+        time_pattern = re.compile(r'(\d+)\s*(hours|minutes|seconds)?')
+        for match in time_pattern.finditer(text):
+            value = match.group(1)
+            key = match.group(2)
+            if key is None:
+                continue
+            result[key.strip()[:-1]] = int(value)
+        return result
+
+    @staticmethod
+    def convert_time(left_wait_time: dict):  # test
+        seconds = 0
+        for time_type, time_value in left_wait_time.items():
+            if time_type == "hour":
+                seconds += time_value * 60 * 60
+            elif time_type == "minute":
+                seconds += time_value * 60
+            elif time_type == "second":
+                seconds += time_value
+        return seconds
 
     async def close_long_wait_queue(self, left_wait_time: int, max_wait_time: int):
         if left_wait_time > max_wait_time:
@@ -218,7 +284,7 @@ class DropppCaptcha(PlaywrightUtils):
 class FunkoBot:
     TWOCAPTCHA_PATH = os.path.abspath("./2captcha-chrome")
     BASE_PROFILE_DIR = os.path.abspath("./profiles")
-    TWOCAPTCHA_API_KEY = "23086f2c5302c5d3c0e6e950fa8d1227"
+    TWOCAPTCHA_API_KEY = ""
 
     sale_link = None
 
@@ -281,22 +347,26 @@ class FunkoProfile:
         self.context = None
         self.page = None
 
-    async def get_context(self, playwright, headless=False):
+    async def get_context(self, playwright: Playwright, headless: bool = False) -> None:
         self.context = await playwright.chromium.launch_persistent_context(
             self.profile_location,
+            # channel="chrome",  # better use chromium
             headless=headless,
+            ignore_default_args=["--enable-automation"],  # '--enable-automation' - off some functions
             args=[
                 f"--disable-extensions-except={FunkoBot.TWOCAPTCHA_PATH}",
                 f"--load-extension={FunkoBot.TWOCAPTCHA_PATH}",
                 '--start-maximized',
-                '--no-sandbox',
+                "--disable-blink-features=AutomationControlled"
             ],
-            ignore_default_args=["--enable-automation", "--no-startup-window"],  # --enable-automation off some functions
+            chromium_sandbox=True,
             no_viewport=True,
             proxy=self.proxy,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
         )
 
-    async def adjust_twocaptcha_extension(self):
+    async def adjust_twocaptcha_extension(self) -> None:
         two_captcha = TwoCaptcha(self.context)
         await two_captcha.get_background()
         self.page = await two_captcha.get_page()
@@ -310,7 +380,7 @@ class FunkoProfile:
         await self.page.goto(FunkoBot.sale_link, wait_until="load")
         return await self.handle_droppp_io()
 
-    async def handle_extra_pages(self):
+    async def handle_extra_pages(self) -> None:
         if len(self.context.pages) > 1:
             await self.context.pages[0].close()
 
@@ -332,24 +402,24 @@ class FunkoProfile:
             raise FailedToLogin(f"Failed to login {self.email}!")
         return True
 
-    async def join_queue(self):
+    async def join_queue(self) -> None:
         queue = QueuePage(page=self.page)
         await queue.click_queue_btn()
         # await queue.bypass_captcha()
         await queue.handle_queue()
 
-    async def close(self):
+    async def close(self) -> None:
         try:
             await self.context.close()
         except Exception as e:
             logger.error(f"Failed to close context {self.email}! {e}")
 
-async def main():
+async def main() -> None:
     await FunkoBot.start()
 
 
 if __name__ == "__main__":
-    print("All crypto moves: @web3enjoyer_club")
+    print("Main <crypto/> moves: @web3enjoyer_club")
     logger.remove(0)
 
     logger.add("out.log")
