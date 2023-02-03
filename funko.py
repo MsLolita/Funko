@@ -3,7 +3,7 @@ from playwright.async_api import async_playwright, Playwright
 import os
 import sys
 import re
-
+import aioconsole
 
 from loguru import logger
 
@@ -22,10 +22,10 @@ class PlaywrightUtils:
         except:
             return None
 
-    async def handle_element(self, selector, action, timeout=5000, state="visible"):
+    async def handle_element(self, selector, action, timeout=5000, state="visible", **params):
         element = await self.get_element(selector, timeout=timeout, state=state)
         if element:
-            await getattr(element, action)()
+            await getattr(element, action)(**params)
             return True
 
     @staticmethod
@@ -73,12 +73,12 @@ class TwoCaptcha:
         self.page = None
 
     async def get_background(self):
-        self.background = await self.get_captcha_popup()
+        self.background = await self.get_2captcha_popup()
         if not self.background:
             self.background = await self.context.wait_for_event("serviceworker")
         return self.background
 
-    async def get_captcha_popup(self):  # seems not working
+    async def get_2captcha_popup(self):  # seems not working
         while True:
             # await asyncio.sleep(0.1)  #need to switch on############################################################
             if len(self.context.service_workers) > 0:
@@ -110,7 +110,6 @@ class TwoCaptcha:
         await self.page.locator('button[id="connect"]').click()
         await self.page.wait_for_load_state("load")
 
-
 class DropppIO(PlaywrightUtils):
     WALLET_SELECTOR = "div[class^=styles_lblAddress]"
 
@@ -122,28 +121,42 @@ class DropppIO(PlaywrightUtils):
 
     async def login(self, email, password): # styles_lblAddress
         await self.handle_element("div[class^=styles_linkSignIn]", "click")
-        await self.page.locator("input[name=email]").fill(email)
-        if await self.is_logged_in(3000):
-            return
-
-        await self.page.locator("form button").click()
-        if await self.is_logged_in(3000):
-            return
-
-        await self.page.locator("input[name=password]").fill(password)
-        if await self.is_logged_in(3000):
-            return
-
-        await self.page.locator("form button").click()
+        for _ in range(3):
+            try:
+                await self.fill_login_form(email, password)
+            except Exception as e:
+                ...
+                # print(e)
+                # print("Login fill failed")  # not bad sometimes not all fields are required
+            finally:
+                # print("Login passed")
+                if await self.is_logged_in(timeout=10000):
+                    break
         if not await self.is_logged_in(timeout=20000):
             assert False, "Failed to login"
 
+    async def fill_login_form(self, email: str, password: str, timeout=10000):
+        await self.handle_element("input[name=email]", "fill", timeout=timeout, value=email)
+
+        await self.handle_element("form button", "click", timeout=timeout)
+
+        await self.handle_element("input[name=password]", "fill", timeout=timeout, value=password)
+
+        await self.handle_element("form button", "click", timeout=timeout)
+
 class QueuePage(PlaywrightUtils):
+    QUEUE_BTN_SELECTOR = "a.collection__header__button"
     def __init__(self, page):
         super().__init__(page=page)
 
+    async def wait_for_queue_btn(self) -> None:  # reload page every 2 minutes to wait for queue button
+        while not await self.get_element(QueuePage.QUEUE_BTN_SELECTOR, timeout=2 * 60 * 1000):  # 2 minutes
+            print("Waiting for queue button")
+            await self.page.reload()
+        print("Queue button found")
+
     async def click_queue_btn(self):
-        queue_btn = await self.get_element("a.collection__header__button", timeout=0)
+        queue_btn = await self.get_element(QueuePage.QUEUE_BTN_SELECTOR, timeout=0)
         redirect_btn_link = await queue_btn.get_attribute("href")
         await self.page.goto(redirect_btn_link)#, wait_until="load", timeout=40000)
 
@@ -154,37 +167,39 @@ class QueuePage(PlaywrightUtils):
     async def handle_queue(self):
         await self.page.goto("file:///C:/Users/Denys/Downloads/Queue-it_.html", wait_until="domcontentloaded")
         await self.wait_for_queue_page_load()
-        print("Queue page loaded")
-        await self.queue_page_status_checker()
+        # print("Queue page loaded")
+        status = await self.queue_page_status_checker()
+        if status is None:
+            print("Can't parse queue page timer")
+        else:
+            logger.success("Queue page successfully handled")
 
-    async def queue_page_status_checker(self, timeout=720, delay=5): # 12 minutes wait
+    async def queue_page_status_checker(self, timeout=720, delay=5) -> bool: # 12 minutes wait
         for _ in range(timeout // delay):
             left_wait_time = await self.get_left_wait_time_regex()  # await self.get_left_wait_time()
-            if not left_wait_time:
-                print("Can't parse left wait time")
-                await asyncio.sleep(delay)
-                continue
-            print(f"Left wait time: {left_wait_time} seconds")
-            await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
-            break
+            if left_wait_time is not None:
+                print(f"Left wait time: {left_wait_time} seconds")
+                return await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
+            print("Can't parse left wait time")
+            await asyncio.sleep(delay)
 
     async def wait_for_queue_page_load(self):
-        print("Waiting for queue page load")
+        # print("Waiting for queue page load")
         await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
 
     async def get_left_wait_time(self):
         progress_info_el = await self.get_element("span#MainPart_lbWhichIsIn", timeout=5000)
-        print(f"1Progress info el: {progress_info_el}")
+        # print(f"1Progress info el: {progress_info_el}")
         if not progress_info_el:
             progress_info_el = await self.get_element("div#defaultCountdown", timeout=5000)
 
         progress_info = await progress_info_el.text_content()
         raw_left_wait_time = progress_info.strip()
-        print(f"Raw left wait time: {raw_left_wait_time}")
+        # print(f"Raw left wait time: {raw_left_wait_time}")
         time_number, time_type = raw_left_wait_time.split(" ")[:2]
 
         left_wait_time = QueuePage.convert_time_seconds(time_number.strip(), time_type.strip().lower())
-        print(f"Left wait time: {left_wait_time} seconds")
+        # print(f"Left wait time: {left_wait_time} seconds")
         return left_wait_time
 
     @staticmethod
@@ -200,19 +215,18 @@ class QueuePage(PlaywrightUtils):
 
     async def get_left_wait_time_regex(self):  # test
         progress_info_el = await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
-        print(f"2Progress info el: {progress_info_el}")
         progress_info = await progress_info_el.inner_text()
-        print(f"Progress info: {progress_info}")
+        # print(f"Progress info: {progress_info}")
 
         left_wait_time = QueuePage.extract_time(progress_info.lower())
-        print(f"Left wait time: {left_wait_time} seconds")
+        # print(f"Left wait time: {left_wait_time} seconds")
 
         if not left_wait_time:  # if not found
              return None
 
         # convert to seconds
         left_wait_time_seconds = QueuePage.convert_time(left_wait_time)
-        print(f"Left wait time: {left_wait_time_seconds} seconds")
+        # print(f"Left wait time: {left_wait_time_seconds} seconds")
         return left_wait_time_seconds
 
     @staticmethod
@@ -247,6 +261,8 @@ class QueuePage(PlaywrightUtils):
     async def close_long_wait_queue(self, left_wait_time: int, max_wait_time: int):
         if left_wait_time > max_wait_time:
             await self.page.close()
+            return True
+        return False
 
 class DropppCaptcha(PlaywrightUtils):
     def __init__(self, page):
@@ -257,7 +273,7 @@ class DropppCaptcha(PlaywrightUtils):
             await self.bypass_droppp_captcha()
 
     async def is_droppp_captcha_on(self):
-        return await self.get_element("div[class^=styles_formContainer]", timeout=30000)
+        return await self.get_element("div[class^=styles_formContainer]", timeout=60000)
 
     async def bypass_droppp_captcha(self):
         answer = 1  # await self.get_droppp_captcha_answer()
@@ -288,37 +304,44 @@ class FunkoBot:
 
     sale_link = None
 
-    @staticmethod
-    async def start():
+    def __init__(self):
+        self.accounts = AccountGrabber.get_accounts()
+
+        self.playwright = None
+
+    async def start(self):
         FunkoBot.sale_link = FunkoBot.ask_for_funko_sale_link()
 
-        accounts = AccountGrabber.get_accounts()
-        unsuccessful = []
-        async with async_playwright() as playwright:
-            for account in accounts:
-                result = await FunkoBot.handle_account(account, playwright)
-                if result:
-                    logger.success(f"Successfully logged in to {account[0]}")
-                else:
-                    unsuccessful.append(account[0])
+        await self.handle_accounts()
 
-            if unsuccessful:
-                logger.info(f"Failed to login to the following accounts: {unsuccessful}")
-            else:
-                logger.success("All accounts logged in successfully!")
-
-            FunkoBot.ask_to_exit()
         logger.info("Finished!")
 
-    @staticmethod
-    async def handle_account(account, playwright):
+    async def handle_accounts(self):
+        accounts_task_manager = []
+        async with async_playwright() as self.playwright:
+            for account in self.accounts:
+                print(account)
+                accounts_task_manager.append(await self.handle_account(account))
+
+            print(accounts_task_manager)
+            await asyncio.gather(*accounts_task_manager)
+            print("Done")
+
+            await FunkoBot.ask_to_exit()
+
+    async def get_profile_worker(self, account):
+        return
+
+    async def handle_account(self, account):
                 funko_profile = FunkoProfile(*account)
         # for _ in range(2):
         #     try:
-                await funko_profile.get_context(playwright)
+                await funko_profile.get_context(self.playwright)
+
                 await funko_profile.adjust_twocaptcha_extension()
                 await funko_profile.visit_funko()
-                await funko_profile.join_queue()
+                await asyncio.sleep(1)
+                return asyncio.ensure_future(funko_profile.join_queue())
             # except FailedToLogin as e:
             #     logger.error(f"{account[0]} - failed to login. Trying again...")
             # except Exception as e:
@@ -331,12 +354,11 @@ class FunkoBot:
         return 'https://digital.funko.com/drop/105/dc-teen-titans-go-series-1/'  # input("Enter a link to the Funko sale: ")
 
     @staticmethod
-    def ask_to_exit():
+    async def ask_to_exit():
         while True:
-            is_exit = input("To exit press y: ")
+            is_exit = await aioconsole.ainput('To exit press y: ')
             if is_exit.lower() == "y":
                 return
-
 class FunkoProfile:
     def __init__(self, email, password, proxy=None):
         self.email = email
@@ -378,6 +400,7 @@ class FunkoProfile:
     async def visit_funko(self) -> bool:
         await self.handle_extra_pages()
         await self.page.goto(FunkoBot.sale_link, wait_until="load")
+        await self.page.wait_for_load_state("load")  # not sure if needed
         return await self.handle_droppp_io()
 
     async def handle_extra_pages(self) -> None:
@@ -404,6 +427,7 @@ class FunkoProfile:
 
     async def join_queue(self) -> None:
         queue = QueuePage(page=self.page)
+        await queue.wait_for_queue_btn()
         await queue.click_queue_btn()
         # await queue.bypass_captcha()
         await queue.handle_queue()
@@ -415,11 +439,11 @@ class FunkoProfile:
             logger.error(f"Failed to close context {self.email}! {e}")
 
 async def main() -> None:
-    await FunkoBot.start()
+    await FunkoBot().start()
 
 
 if __name__ == "__main__":
-    print("Main <crypto/> moves: @web3enjoyer_club")
+    print("Main <crypto/> moves: https://t.me/+tdC-PXRzhnczNDli")
     logger.remove(0)
 
     logger.add("out.log")
