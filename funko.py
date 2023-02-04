@@ -1,4 +1,6 @@
 import asyncio
+import random
+
 from playwright.async_api import async_playwright, Playwright
 import os
 import sys
@@ -143,6 +145,7 @@ class DropppIO(PlaywrightUtils):
         await self.handle_element("input[name=password]", "fill", timeout=timeout, value=password)
 
         await self.handle_element("form button", "click", timeout=timeout)
+import random
 
 class QueuePage(PlaywrightUtils):
     QUEUE_BTN_SELECTOR = "a.collection__header__button"
@@ -163,18 +166,18 @@ class QueuePage(PlaywrightUtils):
     async def bypass_captcha(self):
         droppp_captcha = DropppCaptcha(self.page)
         await droppp_captcha.handle_droppp_captcha()
-
-    async def handle_queue(self):
-        await self.page.goto("file:///C:/Users/Denys/Downloads/Queue-it_.html", wait_until="domcontentloaded")
+    async def handle_queue(self, profile_id: int):
+        await self.page.goto(f"file:///C:/Users/Denys/Downloads/Queue-it_{random.choice(['', '2'])}.html", wait_until="domcontentloaded")
         await self.wait_for_queue_page_load()
-        # print("Queue page loaded")
-        status = await self.queue_page_status_checker()
+        # await asyncio.sleep(20)
+        print("Queue page loaded")
+        status = await self.queue_page_status_checker(timeout=610, delay=5)  # 10 minutes wait
         if status is None:
             print("Can't parse queue page timer")
         else:
-            logger.success("Queue page successfully handled")
+            logger.success(f"{profile_id}. Queue page successfully handled")
 
-    async def queue_page_status_checker(self, timeout=720, delay=5) -> bool: # 12 minutes wait
+    async def queue_page_status_checker(self, timeout: int, delay: int) -> bool:
         for _ in range(timeout // delay):
             left_wait_time = await self.get_left_wait_time_regex()  # await self.get_left_wait_time()
             if left_wait_time is not None:
@@ -184,8 +187,8 @@ class QueuePage(PlaywrightUtils):
             await asyncio.sleep(delay)
 
     async def wait_for_queue_page_load(self):
-        # print("Waiting for queue page load")
-        await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
+        print("Waiting for queue page load")
+        await self.get_element("#MainPart_pProgressbarBox_Holder_Larger", timeout=0)
 
     async def get_left_wait_time(self):
         progress_info_el = await self.get_element("span#MainPart_lbWhichIsIn", timeout=5000)
@@ -237,24 +240,25 @@ class QueuePage(PlaywrightUtils):
     def extract_time(text):  # test
         result = {}
 
-        time_pattern = re.compile(r'(\d+)\s*(hours|minutes|seconds)?')
+        time_pattern = re.compile(r'(\d+) hours?|(\d+) minutes?|(\d+) seconds?')
         for match in time_pattern.finditer(text):
-            value = match.group(1)
-            key = match.group(2)
-            if key is None:
-                continue
-            result[key.strip()[:-1]] = int(value)
+            if match.group(1):
+                result['hours'] = int(match.group(1))
+            elif match.group(2):
+                result['minutes'] = int(match.group(2))
+            elif match.group(3):
+                result['seconds'] = int(match.group(3))
         return result
 
     @staticmethod
     def convert_time(left_wait_time: dict):  # test
         seconds = 0
         for time_type, time_value in left_wait_time.items():
-            if time_type == "hour":
+            if time_type == "hours":
                 seconds += time_value * 60 * 60
-            elif time_type == "minute":
+            elif time_type == "minutes":
                 seconds += time_value * 60
-            elif time_type == "second":
+            elif time_type == "seconds":
                 seconds += time_value
         return seconds
 
@@ -319,9 +323,8 @@ class FunkoBot:
     async def handle_accounts(self):
         accounts_task_manager = []
         async with async_playwright() as self.playwright:
-            for account in self.accounts:
-                print(account)
-                accounts_task_manager.append(await self.handle_account(account))
+            for profile_id, account in enumerate(self.accounts):
+                accounts_task_manager.append(await self.handle_account(profile_id+1, account))
 
             print(accounts_task_manager)
             await asyncio.gather(*accounts_task_manager)
@@ -332,8 +335,9 @@ class FunkoBot:
     async def get_profile_worker(self, account):
         return
 
-    async def handle_account(self, account):
-                funko_profile = FunkoProfile(*account)
+    async def handle_account(self, profile_id, account):
+                logger.info(f"{profile_id}. {account[0]} - starting...")
+                funko_profile = FunkoProfile(profile_id, *account)
         # for _ in range(2):
         #     try:
                 await funko_profile.get_context(self.playwright)
@@ -351,7 +355,7 @@ class FunkoBot:
 
     @staticmethod
     def ask_for_funko_sale_link():
-        return 'https://digital.funko.com/drop/105/dc-teen-titans-go-series-1/'  # input("Enter a link to the Funko sale: ")
+        return 'https://digital.funko.com/drop/108/nicktoons-series-2/'  # input("Enter a link to the Funko sale: ")
 
     @staticmethod
     async def ask_to_exit():
@@ -359,8 +363,10 @@ class FunkoBot:
             is_exit = await aioconsole.ainput('To exit press y: ')
             if is_exit.lower() == "y":
                 return
+
 class FunkoProfile:
-    def __init__(self, email, password, proxy=None):
+    def __init__(self, profile_id: int, email, password, proxy=None):
+        self.profile_id = profile_id
         self.email = email
         self.password = password
         self.proxy = proxy and PlaywrightUtils.get_proxy(proxy)
@@ -416,21 +422,22 @@ class FunkoProfile:
             for _ in range(2):
                 try:
                     await droppp_io.login(self.email, self.password)
-                    logger.success(f"Successfully logged in {self.email}!")
+                    logger.success(f"{self.profile_id}. Successfully logged in {self.email}!")
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to login {self.email}! Retrying...")
+                    logger.error(f"{self.profile_id}. Failed to login {self.email}! Retrying...")
                     await self.page.goto(FunkoBot.sale_link, wait_until="load")
                     await self.page.wait_for_timeout(5000)
-            raise FailedToLogin(f"Failed to login {self.email}!")
+            raise FailedToLogin(f"{self.profile_id}. Failed to login {self.email}!")
         return True
 
     async def join_queue(self) -> None:
         queue = QueuePage(page=self.page)
         await queue.wait_for_queue_btn()
         await queue.click_queue_btn()
-        # await queue.bypass_captcha()
-        await queue.handle_queue()
+        await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
+        await queue.bypass_captcha()
+        await queue.handle_queue(self.profile_id)
 
     async def close(self) -> None:
         try:
