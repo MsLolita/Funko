@@ -4,3 +4,5 @@ old
 profiles
 out.log
 accounts.txt
+backup.py
+test.py

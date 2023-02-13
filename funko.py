@@ -97,9 +97,9 @@ class TwoCaptcha:
         while True:
             # await asyncio.sleep(0.1)  #need to switch on############################################################
             if len(self.context.service_workers) > 0:
-                print("Found captcha popup")
+                # print("Found 2captcha popup")
                 return self.context.service_workers[0]
-            print("Waiting for captcha popup")
+            # print("Waiting for captcha popup")
             await asyncio.sleep(0.1)
 
     async def get_page(self):
@@ -181,16 +181,16 @@ class DropppIO(PlaywrightUtils):
 class QueuePage(PlaywrightUtils):
     QUEUE_BTN_SELECTOR = ".stack__packs__content a.button--black:not(.disabled)"
 
-    max_long_queue: int = int(dotenv_values("config.txt")["max_long_queue"])
+    max_queue_time: int = int(dotenv_values("config.txt")["max_queue_time"])
 
     def __init__(self, page):
         super().__init__(page=page)
 
     async def wait_for_queue_btn(self) -> None:  # reload page every 2 minutes to wait for queue button
         while not await self.get_element(QueuePage.QUEUE_BTN_SELECTOR, timeout=2 * 60 * 1000):  # 2 minutes
-            print("Waiting for queue button")
+            # print("Waiting for queue button")
             await self.page.reload()
-        print("Queue button found")
+        # print("Queue button found")
 
     async def click_queue_btn(self):
         queue_btn = await self.get_element(QueuePage.QUEUE_BTN_SELECTOR, timeout=0)
@@ -199,24 +199,26 @@ class QueuePage(PlaywrightUtils):
 
     async def handle_login(self, email, password, profile_id):
         droppp_io = DropppIO(self.page)
-        print("before login")
+        # print("before login")
         if await droppp_io.is_login_form_available():
-            print("detect login")
+            # print("detect login")
             await droppp_io.handle_login_form(email, password, profile_id)
-        print("passed login")
+        # print("passed login")
 
-    async def bypass_captcha(self):
+    async def bypass_captcha(self, profile_id: int):
         droppp_captcha = DropppCaptcha(self.page)
-        await droppp_captcha.handle_droppp_captcha()
+        await droppp_captcha.handle_droppp_captcha(profile_id)
 
     async def handle_queue(self, profile_id: int):
         # await self.page.goto(f"file:///C:/Users/Denys/Downloads/Queue-it_.html", wait_until="domcontentloaded")
         await self.wait_for_queue_page_load()
         # await asyncio.sleep(20)
-        print("Queue page loaded")
+        # print("Queue page loaded")
+        logger.info(f"{profile_id}. Queue page loaded")
         status = await self.queue_page_status_checker(timeout=900, delay=5)  # 15 minutes wait
         if status is None:
-            print("Can't parse queue page timer")
+            pass
+            # print("Can't parse queue page timer")
         else:
             logger.success(f"{profile_id}. Queue page successfully handled")
 
@@ -224,14 +226,14 @@ class QueuePage(PlaywrightUtils):
         for _ in range(timeout // delay):
             left_wait_time = await self.get_left_wait_time_regex()  # await self.get_left_wait_time()
             if left_wait_time is not None:
-                print(f"Left wait time: {left_wait_time} seconds")
+                # print(f"Left wait time: {left_wait_time} seconds")
                 return await self.close_long_wait_queue(left_wait_time,
-                                                        QueuePage.max_long_queue * 60)  # if > some minutes: close
-            print("Can't parse left wait time")
+                                                        QueuePage.max_queue_time * 60)  # if > some minutes: close
+            # print("Can't parse left wait time")
             await asyncio.sleep(delay)
 
     async def wait_for_queue_page_load(self):
-        print("Waiting for queue page load")
+        # print("Waiting for queue page load")
         await self.get_element("#MainPart_pProgressbarBox_Holder_Larger", timeout=0)
 
     async def get_left_wait_time(self):
@@ -322,12 +324,14 @@ class DropppCaptcha(PlaywrightUtils):
     def __init__(self, page):
         super().__init__(page=page)
 
-    async def handle_droppp_captcha(self):
+    async def handle_droppp_captcha(self, profile_id: int):
+        logger.info(f"{profile_id}. Handling droppp captcha")
         if await self.is_droppp_captcha_on():
             await self.bypass_droppp_captcha()
+            logger.success(f"{profile_id}. Droppp captcha successfully handled")
 
     async def is_droppp_captcha_on(self):
-        return await self.get_element("div[class^=styles_formContainer]", timeout=60000)
+        return await self.get_element("div[class^=styles_formContainer]", timeout=120000)
 
     async def bypass_droppp_captcha(self):
         answer = 1  # await self.get_droppp_captcha_answer()
@@ -355,7 +359,7 @@ class DropppCaptcha(PlaywrightUtils):
 class FunkoBot:
     TWOCAPTCHA_PATH = os.path.abspath("./2captcha-chrome")
     BASE_PROFILE_DIR = os.path.abspath("./profiles")
-    TWOCAPTCHA_API_KEY = ""
+    TWOCAPTCHA_API_KEY = dotenv_values("config.txt")["TWOCAPTCHA_API_KEY"]
 
     sale_link = dotenv_values("config.txt")["sale_link"]
 
@@ -375,9 +379,8 @@ class FunkoBot:
             for profile_id, account in enumerate(self.accounts):
                 accounts_task_manager.append(await self.handle_account(profile_id + 1, account))
 
-            print(accounts_task_manager)
             await asyncio.gather(*accounts_task_manager)
-            print("Done")
+            logger.success("***All accounts handled!***")
 
             await FunkoBot.ask_to_exit()
 
@@ -387,20 +390,20 @@ class FunkoBot:
     async def handle_account(self, profile_id, account):
         logger.info(f"{profile_id}. {account[0]} - starting...")
         funko_profile = None
-        # try:
-        funko_profile = FunkoProfile(profile_id, *account)
-        await funko_profile.get_context(self.playwright)
-        await funko_profile.adjust_twocaptcha_extension()
-        await funko_profile.visit_funko()
-        await asyncio.sleep(1)
-        return asyncio.ensure_future(funko_profile.join_queue())
-        # except FailedToLogin as e:
-        #     logger.error(f"{account[0]} - failed to login")
-        # except Exception as e:
-        #     logger.error(f"{account[0]} - have unhandled error")
-        #     await funko_profile.close()
-        #     await asyncio.sleep(3)
-        # return a coroutine or an awaitable else will be error
+        try:
+            funko_profile = FunkoProfile(profile_id, *account)
+            await funko_profile.get_context(self.playwright)
+            await funko_profile.adjust_twocaptcha_extension()
+            await funko_profile.visit_funko()
+            await asyncio.sleep(1)
+            return asyncio.ensure_future(funko_profile.join_queue())
+        except FailedToLogin as e:
+            logger.error(f"{account[0]} - failed to login")
+        except Exception as e:
+            logger.error(f"{account[0]} - have unhandled error")
+            await funko_profile.close()
+            await asyncio.sleep(3)
+        #### return a coroutine or an awaitable else will be error
         return asyncio.sleep(0)
 
     @staticmethod
@@ -475,7 +478,7 @@ class FunkoProfile:
         await queue.click_queue_btn()
         # await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
         await queue.handle_login(email=self.email, password=self.password, profile_id=self.profile_id)
-        await queue.bypass_captcha()
+        await queue.bypass_captcha(self.profile_id)
         await queue.handle_queue(self.profile_id)
 
     async def close(self) -> None:
