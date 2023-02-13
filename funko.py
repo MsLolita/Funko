@@ -166,6 +166,7 @@ class DropppIO(PlaywrightUtils):
             try:
                 await self.handle_element("div[class^=styles_linkSignIn]", "click")  # goto login page
                 await self.handle_login_form(email, password, profile_id)
+                await self.page.goto(FunkoBot.sale_link, wait_until="load")
                 return True
             except Exception as e:
                 await self.page.goto(FunkoBot.sale_link, wait_until="load")
@@ -182,6 +183,8 @@ class DropppIO(PlaywrightUtils):
         await self.delay(from_=1500, to=2000)
 
         await self.handle_element("input[name=password]", "fill", timeout=timeout, value=password)
+
+        await self.delay(from_=4000, to=4500)
 
         await self.handle_element("form button", "click", timeout=timeout)
 
@@ -408,7 +411,7 @@ class FunkoBot:
         except FailedToLogin as e:
             logger.error(f"{account[0]} - failed to login")
         except Exception as e:
-            logger.error(f"{account[0]} - have unhandled error")
+            logger.error(f"{account[0]} - have unhandled error - {e}")
             await funko_profile.close()
             await asyncio.sleep(3)
         #### return a coroutine or an awaitable else will be error
