@@ -1,0 +1,3 @@
+sale_link=https://digital.funko.com/drop/108/nicktoons-series-2/
+max_queue_time=30
+TWOCAPTCHA_API_KEY=fc2b35f424e00aa3f3a9d301c3198f36
