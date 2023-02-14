@@ -1,0 +1,2 @@
+sale_link=https://digital.funko.com/drop/108/nicktoons-series-2/
+max_long_queue=30

@@ -1,12 +1,13 @@
-import asyncio
-import random
-
-from playwright.async_api import async_playwright, Playwright
 import os
 import sys
 import re
+import asyncio
+
 import aioconsole
 
+from dotenv import dotenv_values
+
+from playwright.async_api import async_playwright, Playwright
 from loguru import logger
 
 class FailedToLogin(Exception):
@@ -145,10 +146,12 @@ class DropppIO(PlaywrightUtils):
         await self.handle_element("input[name=password]", "fill", timeout=timeout, value=password)
 
         await self.handle_element("form button", "click", timeout=timeout)
-import random
 
 class QueuePage(PlaywrightUtils):
-    QUEUE_BTN_SELECTOR = "a.collection__header__button"
+    QUEUE_BTN_SELECTOR = ".stack__packs__content a.button--black:not(.disabled)"
+
+    max_long_queue: int = int(dotenv_values("config.txt")["max_long_queue"])
+
     def __init__(self, page):
         super().__init__(page=page)
 
@@ -166,12 +169,13 @@ class QueuePage(PlaywrightUtils):
     async def bypass_captcha(self):
         droppp_captcha = DropppCaptcha(self.page)
         await droppp_captcha.handle_droppp_captcha()
+
     async def handle_queue(self, profile_id: int):
-        await self.page.goto(f"file:///C:/Users/Denys/Downloads/Queue-it_{random.choice(['', '2'])}.html", wait_until="domcontentloaded")
+        # await self.page.goto(f"file:///C:/Users/Denys/Downloads/Queue-it_.html", wait_until="domcontentloaded")
         await self.wait_for_queue_page_load()
         # await asyncio.sleep(20)
         print("Queue page loaded")
-        status = await self.queue_page_status_checker(timeout=610, delay=5)  # 10 minutes wait
+        status = await self.queue_page_status_checker(timeout=900, delay=5)  # 15 minutes wait
         if status is None:
             print("Can't parse queue page timer")
         else:
@@ -182,7 +186,7 @@ class QueuePage(PlaywrightUtils):
             left_wait_time = await self.get_left_wait_time_regex()  # await self.get_left_wait_time()
             if left_wait_time is not None:
                 print(f"Left wait time: {left_wait_time} seconds")
-                return await self.close_long_wait_queue(left_wait_time, 30 * 60)  # if > 30 minutes: close
+                return await self.close_long_wait_queue(left_wait_time, QueuePage.max_long_queue * 60)  # if > some minutes: close
             print("Can't parse left wait time")
             await asyncio.sleep(delay)
 
@@ -220,6 +224,11 @@ class QueuePage(PlaywrightUtils):
         progress_info_el = await self.get_element("#MainPart_divProgressbarBox_Holder", timeout=0)
         progress_info = await progress_info_el.inner_text()
         # print(f"Progress info: {progress_info}")
+
+        if "less" in progress_info:  # less than a minute
+            return 0
+        elif "more" in progress_info:  # more than an hour
+            return 99999
 
         left_wait_time = QueuePage.extract_time(progress_info.lower())
         # print(f"Left wait time: {left_wait_time} seconds")
@@ -306,7 +315,7 @@ class FunkoBot:
     BASE_PROFILE_DIR = os.path.abspath("./profiles")
     TWOCAPTCHA_API_KEY = ""
 
-    sale_link = None
+    sale_link = dotenv_values("config.txt")["sale_link"]
 
     def __init__(self):
         self.accounts = AccountGrabber.get_accounts()
@@ -314,8 +323,6 @@ class FunkoBot:
         self.playwright = None
 
     async def start(self):
-        FunkoBot.sale_link = FunkoBot.ask_for_funko_sale_link()
-
         await self.handle_accounts()
 
         logger.info("Finished!")
@@ -336,26 +343,23 @@ class FunkoBot:
         return
 
     async def handle_account(self, profile_id, account):
-                logger.info(f"{profile_id}. {account[0]} - starting...")
-                funko_profile = FunkoProfile(profile_id, *account)
-        # for _ in range(2):
-        #     try:
-                await funko_profile.get_context(self.playwright)
-
-                await funko_profile.adjust_twocaptcha_extension()
-                await funko_profile.visit_funko()
-                await asyncio.sleep(1)
-                return asyncio.ensure_future(funko_profile.join_queue())
-            # except FailedToLogin as e:
-            #     logger.error(f"{account[0]} - failed to login. Trying again...")
-            # except Exception as e:
-            #     logger.error(f"{account[0]} - have unhandled error. Trying again...")
-            #     await funko_profile.close()
-            #     await asyncio.sleep(3)
-
-    @staticmethod
-    def ask_for_funko_sale_link():
-        return 'https://digital.funko.com/drop/108/nicktoons-series-2/'  # input("Enter a link to the Funko sale: ")
+        logger.info(f"{profile_id}. {account[0]} - starting...")
+        funko_profile = None
+        # try:
+        funko_profile = FunkoProfile(profile_id, *account)
+        await funko_profile.get_context(self.playwright)
+        await funko_profile.adjust_twocaptcha_extension()
+        await funko_profile.visit_funko()
+        await asyncio.sleep(1)
+        return asyncio.ensure_future(funko_profile.join_queue())
+        # except FailedToLogin as e:
+        #     logger.error(f"{account[0]} - failed to login")
+        # except Exception as e:
+        #     logger.error(f"{account[0]} - have unhandled error")
+        #     await funko_profile.close()
+        #     await asyncio.sleep(3)
+        # return a coroutine or an awaitable else will be error
+        return asyncio.sleep(0)
 
     @staticmethod
     async def ask_to_exit():
@@ -390,8 +394,8 @@ class FunkoProfile:
             chromium_sandbox=True,
             no_viewport=True,
             proxy=self.proxy,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+                       " Chrome/109.0.0.0 Safari/537.36"
         )
 
     async def adjust_twocaptcha_extension(self) -> None:
@@ -435,7 +439,7 @@ class FunkoProfile:
         queue = QueuePage(page=self.page)
         await queue.wait_for_queue_btn()
         await queue.click_queue_btn()
-        await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
+        # await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
         await queue.bypass_captcha()
         await queue.handle_queue(self.profile_id)
 
