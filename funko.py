@@ -489,13 +489,18 @@ class FunkoProfile:
         return True
 
     async def join_queue(self) -> None:
-        queue = QueuePage(page=self.page)
-        await queue.wait_for_queue_btn()
-        await queue.click_queue_btn()
-        # await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
-        await queue.handle_login(email=self.email, password=self.password, profile_id=self.profile_id)
-        await queue.bypass_captcha(self.profile_id)
-        await queue.handle_queue(self.profile_id)
+        try:
+            queue = QueuePage(page=self.page)
+            await queue.wait_for_queue_btn()
+            await queue.click_queue_btn()
+            # await self.page.goto("file:///C:/Users/Denys/Downloads/Reserve%20Packs%20-%20Droppp.html?") #######################
+            await queue.handle_login(email=self.email, password=self.password, profile_id=self.profile_id)
+            await queue.bypass_captcha(self.profile_id)
+            await queue.handle_queue(self.profile_id)
+        except Exception as e:
+            logger.error(f"{self.profile_id}. {self.email} - have unhandled error in queue - {e}")
+            await self.close()
+            await asyncio.sleep(3)
 
     async def close(self) -> None:
         try:
