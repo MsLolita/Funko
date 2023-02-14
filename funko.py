@@ -459,6 +459,11 @@ class FunkoProfile:
         two_captcha = TwoCaptcha(self.context)
         await two_captcha.get_background()
         self.page = await two_captcha.get_page()
+        # some bug on playwright side when use a proxy, need first to connect to internet and then use extension
+        await self.page.wait_for_timeout(1000)
+        if self.proxy:
+            await self.page.goto("https://example.com/", wait_until="domcontentloaded")
+        #
         await two_captcha.open_options_page()
         await two_captcha.switch_on_auto_submit()
         await two_captcha.fill_api_key(FunkoBot.TWOCAPTCHA_API_KEY)
