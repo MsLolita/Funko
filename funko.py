@@ -1,3 +1,4 @@
+import random
 import os
 import sys
 import re
@@ -39,6 +40,9 @@ class PlaywrightUtils:
             return True
         except:
             return False
+
+    async def delay(self, from_: int = 3000, to: int = 5000):
+        await self.page.wait_for_timeout(random.randint(from_, to))
 
     @staticmethod
     def get_proxy(proxy):
@@ -169,9 +173,13 @@ class DropppIO(PlaywrightUtils):
         raise FailedToLogin(f"{profile_id}. Failed to login {email}!")
 
     async def fill_login_form(self, email: str, password: str, timeout=10000):
+        await self.delay(to=4000)
+
         await self.handle_element("input[name=email]", "fill", timeout=timeout, value=email)
 
         await self.handle_element("form button", "click", timeout=timeout)
+
+        await self.delay(from_=1500, to=2000)
 
         await self.handle_element("input[name=password]", "fill", timeout=timeout, value=password)
 
