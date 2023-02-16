@@ -200,7 +200,7 @@ class QueuePage(PlaywrightUtils):
     async def wait_for_queue_btn(self) -> None:  # reload page every 2 minutes to wait for queue button
         while not await self.get_element(QueuePage.QUEUE_BTN_SELECTOR, timeout=2 * 60 * 1000):  # 2 minutes
             # print("Waiting for queue button")
-            await self.page.reload()
+            await self.page.reload(timeout=60 * 1000, wait_until="domcontentloaded")
         # print("Queue button found")
 
     async def click_queue_btn(self):
@@ -499,7 +499,6 @@ class FunkoProfile:
             await queue.handle_queue(self.profile_id)
         except Exception as e:
             logger.error(f"{self.profile_id}. {self.email} - have unhandled error in queue - {e}")
-            await self.close()
             await asyncio.sleep(3)
 
     async def close(self) -> None:
